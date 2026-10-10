@@ -76,16 +76,39 @@ aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_250)
 parameters = cv2.aruco.DetectorParameters()
 detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
 
-cam = cv2.VideoCapture(0)  # change index if the wrong camera opens
-cam.set(3, 700)
-cam.set(4, 505)
+# Initialize an empty list to store the camera numbers
+camera_numbers = []
+
+# ---------- Camera scan ----------
+# Use DirectShow explicitly and stop at the first missing index.
+# CAP_ANY would also try the Orbbec backend and spam "index out of range".
+BACKEND = cv2.CAP_DSHOW
+camera_numbers = []
+for index in range(10):
+    cap = cv2.VideoCapture(index, BACKEND)
+    if not cap.isOpened():
+        cap.release()
+        break
+    ok, _ = cap.read()
+    if ok:
+        camera_numbers.append(index)
+    cap.release()
+
+print(f"List of camera numbers: {camera_numbers}")
+if not camera_numbers:
+    raise RuntimeError("No working camera found. Check that no other app is using it.")
+
+
+cam = cv2.VideoCapture(camera_numbers[-1])  # change index if the wrong camera opens
+cam.set(3, 1366)
+cam.set(4, 768)
 cam.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # keep frames fresh; stale frames = wrong measurements
 
 if not cam.isOpened():
     raise RuntimeError("Could not open camera. Try a different index (0, 1, 2...).")
 
 # ---------- Tolerances ----------
-POSITION_TOLERANCE_PX = 5      # final waypoint
+POSITION_TOLERANCE_PX = 5       # final waypoint
 WAYPOINT_TOLERANCE_PX = 10      # intermediate waypoints (no need to be precise)
 ANGLE_TOLERANCE_DEG = 8
 ROTATE_SIGN = 1                 # confirmed correct via testing

@@ -23,12 +23,6 @@ learned turn-rate (deg/ms) and move-rate (px/ms), and the pulse power
 bumps itself up if a pulse produces no motion (stiction), so there's
 little to hand-tune.
 
-SMOOTH DRIVE: legs longer than DRIVE_MIN_PX are driven as overlapping short
-pulses (re-sent every ~50 ms, each self-timed on the ESP) instead of
-pulse -> brake -> settle -> sample repeatedly. Intermediate waypoints are
-passed without stopping; the bot only stops to turn (original rotation
-logic, unchanged), at the final waypoint, or for short fine approaches.
-
 Packet format: <letter><percent>T<ms>, e.g. "D50T120" = rotate right at
 50% for 120 ms.  W forward, S backward, A rotate left, D rotate right,
 X stop.
@@ -52,8 +46,7 @@ import cv2
 import numpy as np
 
 # ---------- Bot connection ----------
-ESP_IP = "192.168.50.175"   # <-- set to your board's IP address
-# ESP_IP = "192.168.50.252"
+ESP_IP = "192.168.50.100"   # <-- set to your board's IP address
 ESP_PORT = 4210
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -113,22 +106,6 @@ MIN_MOVE_MOTION_PX = 3.0
 REVERSE_MAX_PX = 60             # target this close and behind us -> back up instead of spinning around
 REVERSE_ANGLE_DEG = 150
 
-# ---------- Smooth driving (rolling pulses) ----------
-# Long straight legs are driven as a stream of short ESP-timed pulses that
-# overlap, so the bot never brakes/settles/re-samples mid-leg. Each pulse
-# still times itself on the ESP: if this script or the camera dies, the bot
-# brakes within DRIVE_PULSE_MS. Turning and short final approaches use the
-# original single-pulse logic, untouched.
-DRIVE_MIN_PX = 50               # farther than this -> smooth drive; closer -> old fine pulses
-DRIVE_PULSE_MS = 120            # each rolling pulse (the bot's fail-safe window)
-DRIVE_RESEND_MS = 50            # re-send interval; < DRIVE_PULSE_MS so pulses overlap
-DRIVE_LEAD_MS = 150             # stop this many ms of travel early (camera lag + brake)
-DRIVE_CONFIRM_FRAMES = 2        # consecutive bad-heading frames before aborting a drive
-DRIVE_LOST_GRACE_MS = 200       # marker may vanish this long before the drive is cut
-DRIVE_STICTION_CHECK_MS = 600   # no motion after this long -> stop, let learn() bump power
-DRIVE_MAX_MS = 6000             # safety cap on one continuous drive
-DRIVE_RATE_INIT = 0.10          # px per ms during a long drive (learned)
-
 WINDOW_NAME = "Navigation"
 
 
@@ -173,13 +150,6 @@ class NavApp:
 
         self.turn_rate = TURN_RATE_INIT
         self.move_rate = MOVE_RATE_INIT
-        self.drive_rate = DRIVE_RATE_INIT
-
-        self.drive_start_t = 0.0       # smooth-drive bookkeeping
-        self.drive_start_pose = None
-        self.last_send = 0.0
-        self.last_seen = 0.0
-        self.bad_frames = 0
         self.turn_percent = START_TURN_PERCENT
         self.move_percent = START_MOVE_PERCENT
 
@@ -239,9 +209,6 @@ class NavApp:
 
     # ----- per-frame step -----
     def step(self, pose, now):
-        if self.phase == "DRIVE":
-            self.drive_step(pose, now)
-            return
         if self.phase == "SETTLE":
             if now >= self.ready_at:
                 self.phase = "SAMPLE"
@@ -287,11 +254,8 @@ class NavApp:
             self.pulse_turn(herr, pose, now)
             return
 
-        # 4) facing it: long leg -> smooth drive, short leg -> fine pulse
-        if distance > DRIVE_MIN_PX:
-            self.start_drive(pose, now)
-        else:
-            self.pulse_move('W', distance, pose, now)
+        # 4) facing it: drive
+        self.pulse_move('W', distance, pose, now)
 
     def advance(self):
         self.current_index += 1
@@ -302,77 +266,6 @@ class NavApp:
         else:
             self.phase = "SAMPLE"   # bot is already still, measure right away
             self.samples = []
-
-    # ----- smooth drive -----
-    def send_drive_pulse(self, now):
-        send_pulse('W', self.move_percent, DRIVE_PULSE_MS)
-        self.last_send = now
-
-    def start_drive(self, pose, now):
-        self.drive_start_t = now
-        self.drive_start_pose = pose
-        self.last_seen = now
-        self.bad_frames = 0
-        self.last_kind = "move"
-        self.phase = "DRIVE"
-        self.send_drive_pulse(now)
-
-    def drive_step(self, pose, now):
-        if pose is None:
-            if now - self.last_seen > DRIVE_LOST_GRACE_MS / 1000.0:
-                self.end_drive(now)
-            return
-        self.last_seen = now
-        cx, cy, ang = pose
-
-        # roll straight through intermediate waypoints without stopping
-        while True:
-            tx, ty = self.waypoints[self.current_index]
-            distance = math.hypot(tx - cx, ty - cy)
-            is_last = self.current_index == len(self.waypoints) - 1
-            if is_last or distance > WAYPOINT_TOLERANCE_PX:
-                break
-            self.current_index += 1
-
-        herr = ROTATE_SIGN * normalize_angle(math.degrees(math.atan2(ty - cy, tx - cx)) - ang)
-        self.debug = f"dist:{distance:.0f} herr:{herr:.0f} heading:{ang:.0f}"
-        self.status = f"DRIVE W {self.move_percent}%"
-
-        # 1) near the final waypoint: cut early by the lead distance
-        if is_last and distance <= POSITION_TOLERANCE_PX + self.drive_rate * DRIVE_LEAD_MS:
-            self.end_drive(now)
-            return
-
-        # 2) drifted off course (same 2x tolerance the old move logic used)
-        if abs(herr) > ANGLE_TOLERANCE_DEG * 2:
-            self.bad_frames += 1
-            if self.bad_frames >= DRIVE_CONFIRM_FRAMES:
-                self.end_drive(now)
-                return
-        else:
-            self.bad_frames = 0
-
-        # 3) not moving (stiction) or running too long
-        elapsed = now - self.drive_start_t
-        x0, y0, _ = self.drive_start_pose
-        if elapsed > DRIVE_STICTION_CHECK_MS / 1000.0 and math.hypot(cx - x0, cy - y0) < MIN_MOVE_MOTION_PX:
-            self.end_drive(now)
-            return
-        if elapsed > DRIVE_MAX_MS / 1000.0:
-            self.end_drive(now)
-            return
-
-        # 4) keep the rolling pulses overlapping
-        if now - self.last_send >= DRIVE_RESEND_MS / 1000.0:
-            self.send_drive_pulse(now)
-
-    def end_drive(self, now):
-        send_stop()  # active brake right now
-        ms = (now - self.drive_start_t) * 1000.0
-        self.pending = {"kind": "drive", "cmd": 'W', "ms": ms, "pose": self.drive_start_pose}
-        self.last_kind = "move"
-        self.ready_at = now + (BRAKE_MS + SETTLE_MS) / 1000.0
-        self.phase = "SETTLE"
 
     # ----- pulses -----
     @staticmethod
@@ -418,10 +311,6 @@ class NavApp:
             moved = math.hypot(x1 - x0, y1 - y0)
             if moved < MIN_MOVE_MOTION_PX:
                 self.move_percent = min(MAX_PULSE_PERCENT, self.move_percent + PERCENT_BUMP)
-            elif p["kind"] == "drive":
-                if p["ms"] >= 200:
-                    sample = moved / p["ms"]
-                    self.drive_rate = clamp(0.5 * self.drive_rate + 0.5 * sample, RATE_MIN, RATE_MAX)
             elif p["ms"] >= 50:
                 sample = moved / p["ms"]
                 self.move_rate = clamp(0.5 * self.move_rate + 0.5 * sample, RATE_MIN, RATE_MAX)

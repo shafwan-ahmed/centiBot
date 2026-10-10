@@ -52,8 +52,7 @@ import cv2
 import numpy as np
 
 # ---------- Bot connection ----------
-ESP_IP = "192.168.50.175"   # <-- set to your board's IP address
-# ESP_IP = "192.168.50.252"
+ESP_IP = "192.168.50.100"   # <-- set to your board's IP address
 ESP_PORT = 4210
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

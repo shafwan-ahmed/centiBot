@@ -22,7 +22,7 @@ import socket
 import time
 import keyboard
 
-ESP_IP = "192.168.50.175"   # <-- set this to your ESP32-C3's IP address
+ESP_IP = "192.168.50.100"   # <-- set this to your ESP32-C3's IP address
 ESP_PORT = 4210
 SEND_INTERVAL_S = 0.05     # 50ms, well under the ESP32's 300ms watchdog
 

@@ -66,18 +66,18 @@ class BotConfig:
 
 
 ROBOTS = [
-    BotConfig(bot_id=1, ip="192.168.50.100", color=(255, 0, 0)),   # blue
-    BotConfig(bot_id=2, ip="192.168.50.175", color=(0, 200, 0)),   # green
+    BotConfig(bot_id=1, ip="192.168.50.99", color=(255, 0, 0)),   # blue
+    BotConfig(bot_id=2, ip="192.168.50.174", color=(0, 200, 0)),   # green
 ]
 
 # ---------- Coordination ----------
-WAIT_TIME = 5          # seconds both bots stay still after BOTH have arrived
+WAIT_TIME = 3         # seconds both bots stay still after BOTH have arrived
 AUTO_START = False     # True = begin as soon as the first pair is clicked (no 's')
 
 # ---------- Camera ----------
 CAMERA_INDEX = 0       # change if the wrong camera opens
-FRAME_WIDTH = 700
-FRAME_HEIGHT = 505
+FRAME_WIDTH = 1366
+FRAME_HEIGHT = 768
 WINDOW_NAME = "Navigation"
 
 # ---------- Tolerances ----------
